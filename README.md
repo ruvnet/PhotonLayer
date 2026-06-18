@@ -116,6 +116,33 @@ let frame = ScalarSimulator.simulate(&img, &mask, &cfg).unwrap();
 assert_eq!(frame.frame_hash, ScalarSimulator.simulate(&img, &mask, &cfg).unwrap().frame_hash);
 ```
 
+## Examples
+
+A practical-to-exotic ladder of runnable examples — full catalog (what each shows
++ run command) in **[`examples/README.md`](examples/README.md)**. Every one
+compiles clean and runs offline on the built-in synthetic dataset; all numbers are
+computed, never fabricated.
+
+```sh
+# Practical
+cargo run --release --example hello_optics           -p photonlayer-core   # minimal pipeline + deterministic hash
+cargo run --release --example compression            -p photonlayer-core   # 64x fewer sensor pixels, rendered as ASCII
+cargo run --release --example receipt                -p photonlayer-core   # build, verify, tamper -> fails
+# Intermediate
+cargo run --release --example propagation_modes      -p photonlayer-core   # Fresnel / Fraunhofer / AngularSpectrum
+cargo run --release --example learn_mask             -p photonlayer-bench  # hill-climb: learned beats random
+cargo run --release --example differential_detection -p photonlayer-bench  # the Li/Ozcan I+ - I- lever
+# Advanced
+cargo run --release --example gradient_training      -p photonlayer-bench  # train through the proven adjoint
+cargo run --release --example multiplane_cascade     -p photonlayer-bench  # 2-plane composed adjoint
+# Exotic
+cargo run --release --example optical_feature_extractor -p photonlayer-bench  # optics as analog feature extractor
+cargo run --release --example wavefront_focus        -p photonlayer-core   # a learned lens concentrates light
+cargo run --release --example privacy_probe          -p photonlayer-bench  # linear reconstruction attack (lower bound)
+# Real data (skips cleanly if the MNIST cache is absent)
+cargo run --release --example mnist_compression      -p photonlayer-bench
+```
+
 ## Crates
 
 | Crate | What it is |
