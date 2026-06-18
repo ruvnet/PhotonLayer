@@ -72,7 +72,7 @@ Each added plane sees a genuinely different diffracted field (verified decorrela
 cargo test -p photonlayer-bench --release --test mnist_gradient_bench \
     mnist_gradient_full -- --ignored --nocapture     # single-plane 83.30%
 cargo test -p photonlayer-bench --release --test mnist_cascade_bench \
-    mnist_cascade_full -- --ignored --nocapture       # 2-plane 88.35%, 3-plane 89.65%
+    mnist_cascade_full -- --ignored --nocapture       # 2-plane 88.80%, 3-plane 89.80%
 ```
 
 > **Read the +7.9 pp vs the full-image baseline carefully — it is NOT a superiority claim.** Holding the decoder fixed at a *tiny nearest-centroid head*, the 64 learned optical features are more linearly separable than 1024 raw pixels (83.30 % vs 75.40 %). That is a statement about **feature separability under a fixed weak decoder**, not evidence that optics beat digital methods: nearest-centroid on raw pixels is a deliberately weak baseline, and a small CNN on the *same* 1024 pixels reaches ~99 % and beats both. We report this so the obvious objection is already answered. It is a single-layer ceiling-break, not an absolute MNIST SOTA.
