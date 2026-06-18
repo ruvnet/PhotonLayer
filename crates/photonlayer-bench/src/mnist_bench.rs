@@ -32,11 +32,13 @@
 
 use crate::decoder::{frame_features, pool_features, NearestCentroid};
 use crate::diffdetect::DiffDetector;
+use crate::grad_train::{build_grad_samples, train_mask_grad, GradTrainConfig};
 use crate::mnist::MNIST_CLASSES;
 use crate::synthetic::Sample;
 use core::f32::consts::PI;
 use photonlayer_core::config::OpticalConfig;
 use photonlayer_core::mask::PhaseMask;
+use photonlayer_core::propagate::Propagator;
 use photonlayer_core::rng::DeterministicRng;
 use photonlayer_core::simulator::{OpticalSimulator, ScalarSimulator};
 
@@ -380,5 +382,93 @@ pub fn run_mnist_differential(
         baseline_macs,
         optical_macs,
         mac_reduction_x: baseline_macs as f32 / optical_macs as f32,
+    }
+}
+
+/// Result of the gradient-trained ceiling-break run. Every field is measured.
+#[derive(Clone, Debug)]
+pub struct GradMnistResult {
+    pub train_size: usize,
+    pub test_size: usize,
+    pub grid: usize,
+    pub sensor: usize,
+    pub seed: u64,
+    pub epochs: usize,
+    pub lr_mask: f32,
+    /// Gradient-trained optical blind-test accuracy, NCC decoder (apples-to-
+    /// apples with the hill-climb metric).
+    pub grad_optical_acc: f32,
+    /// Same NCC decoder on the random init mask (the WIN floor).
+    pub random_optical_acc: f32,
+    /// Full-image digital baseline (NCC on raw pooled pixels).
+    pub baseline_acc: f32,
+    /// Per-epoch mean cross-entropy (the loss curve, reported honestly).
+    pub loss_curve: Vec<f32>,
+    /// Structural compression: input px / sensor px.
+    pub sensor_reduction_x: f32,
+    pub baseline_pixels: usize,
+    pub optical_sensor_pixels: usize,
+}
+
+/// Train a phase mask by GRADIENT DESCENT through the proven diffraction adjoint
+/// and evaluate blind-test accuracy with the SAME nearest-centroid decoder the
+/// hill-climb baseline uses. This is the ceiling-break measurement.
+///
+/// Eval is identical to `decode_optical_acc` (NCC on the pooled `sensor×sensor`
+/// readout), so the resulting accuracy is directly comparable to the 73.05%
+/// hill-climb number — the only thing that changed is HOW the mask was trained.
+pub fn run_mnist_grad(
+    train: &[Sample],
+    test: &[Sample],
+    grid: usize,
+    sensor: usize,
+    gc: &GradTrainConfig,
+) -> GradMnistResult {
+    let cfg = OpticalConfig::demo(grid, grid);
+    let prop = Propagator::new(grid, grid, &cfg).expect("propagator");
+
+    // Deterministic init mask: same random phase the hill-climb starts from, so
+    // the random-vs-grad delta is a fair "what did gradient buy us" measurement.
+    let init = PhaseMask::random(grid, grid, gc.seed);
+    let (random_optical_acc, _) = decode_optical_acc(train, test, &init, &cfg, sensor);
+
+    // --- Gradient training (the proven adjoint does the optical backward). ---
+    let data = build_grad_samples(train, &cfg);
+    let out = train_mask_grad(&prop, grid, grid, &data, &init.phase_radians, gc);
+
+    // Wrap the trained phases back into a PhaseMask for the SAME NCC eval path.
+    let trained = PhaseMask::new(grid, grid, out.theta, format!("grad:{:#x}", gc.seed))
+        .expect("trained mask dims");
+    let (grad_optical_acc, _) = decode_optical_acc(train, test, &trained, &cfg, sensor);
+
+    // --- Full-image digital baseline (identical NCC family on raw pixels). ---
+    let baseline_feats = |samples: &[Sample]| -> (Vec<Vec<f32>>, Vec<usize>) {
+        let f = samples
+            .iter()
+            .map(|s| pool_features(&s.image.pixels, s.image.width, s.image.height, grid))
+            .collect();
+        (f, samples.iter().map(|s| s.label).collect())
+    };
+    let (btr_f, btr_l) = baseline_feats(train);
+    let (bte_f, bte_l) = baseline_feats(test);
+    let baseline_acc = NearestCentroid::fit(&btr_f, &btr_l, MNIST_CLASSES).accuracy(&bte_f, &bte_l);
+
+    let baseline_pixels = grid * grid;
+    let optical_sensor_pixels = sensor * sensor;
+    GradMnistResult {
+        train_size: train.len(),
+        test_size: test.len(),
+        grid,
+        sensor,
+        seed: gc.seed,
+        epochs: gc.epochs,
+        lr_mask: gc.lr_mask,
+        grad_optical_acc,
+        random_optical_acc,
+        baseline_acc,
+        loss_curve: out.loss_curve,
+        sensor_reduction_x: baseline_pixels as f32 / optical_sensor_pixels as f32,
+        baseline_pixels,
+        optical_sensor_pixels,
     }
 }
