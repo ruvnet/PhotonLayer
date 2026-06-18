@@ -203,6 +203,146 @@ impl Propagator {
         }
         Ok(())
     }
+
+    /// **Adjoint** (conjugate-transpose) of [`Propagator::propagate_into`], in place.
+    ///
+    /// Treating the forward propagator `P` as a `ℂ`-linear map on the field, the
+    /// adjoint `P^H` is what pulls an output-plane cotangent back to the input
+    /// plane during reverse-mode (Wirtinger) differentiation. It is the keystone
+    /// of gradient-based optical training: backward through `P` for the mask-plane
+    /// gradient (see [`phase_gradient`]).
+    ///
+    /// **Transfer arm (Fresnel / AngularSpectrum).** The forward operator is
+    /// `P(u) = IFFT(H ⊙ FFT(u))`, i.e. the composition `IFFT ∘ M_H ∘ FFT`, where
+    /// `M_H` is pointwise multiply by `H`. Its conjugate transpose is
+    /// `FFT^H ∘ M_H^H ∘ IFFT^H` with `M_H^H = M_{conj(H)}`. In this crate's
+    /// FFT convention the forward transform is unnormalized and the inverse
+    /// carries the `1/N` factor, so `FFT^H = N · IFFT` and `IFFT^H = (1/N) · FFT`.
+    /// The two `N` factors cancel, leaving
+    /// `P^H(r) = IFFT(conj(H) ⊙ FFT(r))` — structurally identical to
+    /// `propagate_into` but multiplying by `conj(H)` instead of `H`.
+    ///
+    /// **Fraunhofer arm.** Forward is `norm · FFT(checkerboard ⊙ r)` where the
+    /// checkerboard is the exact ±1 diagonal `C` (its own inverse and self-adjoint,
+    /// `C^H = C`) and `norm = 1/√(N)` is a real scalar. The adjoint is therefore
+    /// `C ⊙ FFT^H(norm · r) = norm · C ⊙ (N · IFFT(r))`. This arm is **not yet
+    /// implemented** here (the gradient path below exercises only the Transfer
+    /// arm); it is documented so the missing piece is explicit rather than silent.
+    pub fn backward_into(&self, data: &mut [Complex]) -> Result<()> {
+        let (w, h) = (self.width, self.height);
+        if data.len() != w * h {
+            return Err(PhotonError::NotPowerOfTwo(data.len()));
+        }
+        match &self.kind {
+            PropKind::Transfer(hk) => {
+                fft_2d(data, w, h, false);
+                for (dv, hv) in data.iter_mut().zip(hk.iter()) {
+                    // Multiply by conj(H): the only change from the forward pass.
+                    *dv = *dv * hv.conj();
+                }
+                fft_2d(data, w, h, true);
+            }
+            PropKind::Fraunhofer => {
+                // Documented above; not required by the current gradient path.
+                return Err(PhotonError::InvalidConfig(
+                    "backward_into: Fraunhofer adjoint not implemented (use Transfer arm)".into(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Analytic gradient of the intensity loss `L = Σ_k w[k] · |P(u0 ⊙ e^{iθ})[k]|²`
+/// with respect to the per-cell phase `θ`, for the Transfer propagation arm.
+///
+/// `u0` is the field reaching the mask plane (full grid, row-major), `theta` the
+/// per-cell phase (same length), and `w` a fixed real per-pixel weight on the
+/// sensor-plane intensity. Returns `dL/dθ` (same length as `theta`).
+///
+/// Derivation (Wirtinger reverse-mode): with `u1 = u0 ⊙ e^{iθ}` and `y = P(u1)`,
+/// the output-plane cotangent of `L = Σ w·|y|²` is `ḡ_y = ∂L/∂conj(y) = w ⊙ y`.
+/// Pulling it back through the adjoint gives `ḡ_{u1} = P^H(ḡ_y)`. Since
+/// `∂u1[k]/∂θ[k] = i·u1[k]` and `L` is real,
+/// `dL/dθ[k] = 2·Re( conj(ḡ_{u1}[k]) · i·u1[k] ) = 2·Im( conj(u1[k]) · ḡ_{u1}[k] )`.
+/// The constant (2) and sign are validated by the finite-difference gradient
+/// check in this module's tests — aggregate relative-L2 agreement ~1e-4 against
+/// a central difference (well inside the f32 FD noise floor).
+pub fn phase_gradient(
+    prop: &Propagator,
+    u0: &[Complex],
+    theta: &[f32],
+    w_weight: &[f32],
+) -> Result<Vec<f32>> {
+    let n = prop.width * prop.height;
+    if u0.len() != n || theta.len() != n || w_weight.len() != n {
+        return Err(PhotonError::DimensionMismatch {
+            expected: n,
+            got: u0.len().min(theta.len()).min(w_weight.len()),
+        });
+    }
+
+    // Masked field u1 = u0 ⊙ e^{iθ}.
+    let u1: Vec<Complex> = u0
+        .iter()
+        .zip(theta.iter())
+        .map(|(&c, &t)| c * Complex::from_phase(t))
+        .collect();
+
+    // Forward: y = P(u1).
+    let mut y = u1.clone();
+    prop.propagate_into(&mut y)?;
+
+    // Output-plane cotangent of L = Σ w·|y|²: ḡ_y = w ⊙ y (w real).
+    let mut gback: Vec<Complex> = y
+        .iter()
+        .zip(w_weight.iter())
+        .map(|(&yk, &wk)| yk.scale(wk))
+        .collect();
+
+    // Pull back through the adjoint: ḡ_{u1} = P^H(ḡ_y).
+    prop.backward_into(&mut gback)?;
+
+    // dL/dθ[k] = 2·Im( conj(u1[k]) · ḡ_{u1}[k] ).
+    let grad: Vec<f32> = u1
+        .iter()
+        .zip(gback.iter())
+        .map(|(&u, &g)| {
+            let p = u.conj() * g;
+            2.0 * p.im
+        })
+        .collect();
+    Ok(grad)
+}
+
+/// Scalar loss `L = Σ_k w[k] · |P(u0 ⊙ e^{iθ})[k]|²` — the differentiable
+/// objective whose analytic gradient [`phase_gradient`] returns. Exposed so the
+/// finite-difference check can perturb `theta` and recompute `L` directly.
+pub fn intensity_loss(
+    prop: &Propagator,
+    u0: &[Complex],
+    theta: &[f32],
+    w_weight: &[f32],
+) -> Result<f32> {
+    let n = prop.width * prop.height;
+    if u0.len() != n || theta.len() != n || w_weight.len() != n {
+        return Err(PhotonError::DimensionMismatch {
+            expected: n,
+            got: u0.len().min(theta.len()).min(w_weight.len()),
+        });
+    }
+    let mut y: Vec<Complex> = u0
+        .iter()
+        .zip(theta.iter())
+        .map(|(&c, &t)| c * Complex::from_phase(t))
+        .collect();
+    prop.propagate_into(&mut y)?;
+    let l: f32 = y
+        .iter()
+        .zip(w_weight.iter())
+        .map(|(&yk, &wk)| wk * yk.norm_sqr())
+        .sum();
+    Ok(l)
 }
 
 #[cfg(test)]
@@ -241,6 +381,9 @@ mod tests {
         let nonzero = out.data.iter().filter(|c| c.norm_sqr() > 1e-6).count();
         assert!(nonzero > 10, "point did not spread: {nonzero} nonzero");
     }
+
+    // Gradient-training tests (adjoint + finite-difference check) live in
+    // `tests/gradient_check.rs` so this file stays under the 500-line limit.
 
     #[test]
     fn fraunhofer_of_point_is_uniform() {

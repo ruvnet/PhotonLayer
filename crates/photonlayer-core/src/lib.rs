@@ -62,7 +62,7 @@ pub mod prelude {
         accuracy, compression_ratio, frame_spectrum_embedding, input_frame_similarity, mse, psnr,
         MetricReport,
     };
-    pub use crate::propagate::{propagate, Propagator};
+    pub use crate::propagate::{intensity_loss, phase_gradient, propagate, Propagator};
     pub use crate::receipt::{build_receipt, verify_receipt, ExperimentReceipt, Provenance};
     pub use crate::simulator::{OpticalSimulator, ScalarSimulator, SimulationTrace};
 }
