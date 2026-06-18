@@ -24,6 +24,15 @@ impl Complex {
     }
 
     /// `exp(i * theta)` — a unit phasor. Core of phase-mask application.
+    ///
+    /// # Determinism note
+    /// `cos`/`sin` here go through the platform `libm`, which is **not**
+    /// correctly-rounded and can differ by a ULP between glibc / musl / Apple /
+    /// wasm. That (not floating-point contraction — Rust never fuses `a*b + c`
+    /// into an FMA without an explicit `mul_add`) is the real obstacle to
+    /// *cross-platform* bit-identity. Same-platform runs are fully reproducible;
+    /// fully portable bit-identity would require owning these transcendentals
+    /// (e.g. a fixed polynomial/CORDIC) — see the README determinism section.
     #[inline]
     pub fn from_phase(theta: f32) -> Self {
         Self {

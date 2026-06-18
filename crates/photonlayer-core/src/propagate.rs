@@ -166,7 +166,10 @@ impl Propagator {
     /// Propagate a field through the precomputed operator.
     pub fn propagate(&self, field: &OpticalField) -> Result<OpticalField> {
         if field.width != self.width || field.height != self.height {
-            return Err(PhotonError::NotPowerOfTwo(field.width));
+            return Err(PhotonError::DimensionMismatch {
+                expected: self.width * self.height,
+                got: field.width * field.height,
+            });
         }
         match &self.kind {
             PropKind::Fraunhofer => fraunhofer(field),
@@ -180,7 +183,7 @@ impl Propagator {
     pub fn propagate_into(&self, data: &mut [Complex]) -> Result<()> {
         let (w, h) = (self.width, self.height);
         if data.len() != w * h {
-            return Err(PhotonError::NotPowerOfTwo(data.len()));
+            return Err(PhotonError::DimensionMismatch { expected: w * h, got: data.len() });
         }
         match &self.kind {
             PropKind::Fraunhofer => {
@@ -231,7 +234,7 @@ impl Propagator {
     pub fn backward_into(&self, data: &mut [Complex]) -> Result<()> {
         let (w, h) = (self.width, self.height);
         if data.len() != w * h {
-            return Err(PhotonError::NotPowerOfTwo(data.len()));
+            return Err(PhotonError::DimensionMismatch { expected: w * h, got: data.len() });
         }
         match &self.kind {
             PropKind::Transfer(hk) => {
@@ -268,6 +271,15 @@ impl Propagator {
 /// The constant (2) and sign are validated by the finite-difference gradient
 /// check in this module's tests — aggregate relative-L2 agreement ~1e-4 against
 /// a central difference (well inside the f32 FD noise floor).
+///
+/// # Caution — `theta` is full-grid, not a centered sub-aperture
+/// `theta` (and `u0`, `w_weight`) must cover the **entire** propagation grid
+/// (`width*height`, row-major) — the same grid [`Propagator::propagate_into`]
+/// operates on. This is **not** the centered sub-aperture layout that
+/// [`crate::mask::PhaseMask::apply`] uses (a mask smaller than the field is
+/// written into the field's center). To differentiate a sub-aperture mask,
+/// first expand it to a full-grid `theta` (zeros outside the aperture); calling
+/// this with a smaller, centered phase array silently misaligns the gradient.
 pub fn phase_gradient(
     prop: &Propagator,
     u0: &[Complex],

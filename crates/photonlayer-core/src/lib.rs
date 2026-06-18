@@ -63,7 +63,9 @@ pub mod prelude {
         MetricReport,
     };
     pub use crate::propagate::{intensity_loss, phase_gradient, propagate, Propagator};
-    pub use crate::receipt::{build_receipt, verify_receipt, ExperimentReceipt, Provenance};
+    pub use crate::receipt::{
+        build_receipt, replay_and_verify, verify_receipt, ExperimentReceipt, Provenance,
+    };
     pub use crate::simulator::{OpticalSimulator, ScalarSimulator, SimulationTrace};
 }
 
