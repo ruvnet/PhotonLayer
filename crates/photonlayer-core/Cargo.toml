@@ -7,7 +7,7 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 description = "Deterministic optical-AI front end in pure Rust: a learned phase mask compresses light into task-useful sensor pixels."
-keywords = ["optics", "optical-computing", "computational-imaging", "simulation", "wasm"]
+keywords = ["optics", "optical-computing", "diffraction", "simulation", "wasm"]
 categories = ["science", "simulation"]
 readme = "README.md"
 
