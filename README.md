@@ -19,6 +19,31 @@
 
 ---
 
+## In plain language
+
+**What if a camera could skip taking the picture and just capture the answer?**
+
+A normal camera records every pixel of a scene, and then a computer reads all of them to decide what it's looking at. PhotonLayer flips that around. It places a specially-shaped piece of "smart glass" — a *phase mask* — in front of a small sensor. The mask bends the incoming light so that, by the time it reaches the sensor, the useful information has been squeezed into just a handful of numbers. A tiny program reads those numbers and gives the answer.
+
+Think of it like a translator who listens to a whole speech and hands you a one-line summary — you never needed the full transcript to act on it. The "lens" is *trained* (by trial and improvement) to do that summarizing **in the light itself**, before anything is digitized.
+
+Why that's interesting:
+
+- **Capture less** — a few sensor pixels instead of a full image, so there is far less data to move and process.
+- **Decide faster and cheaper** — the heavy lifting happens in the optics; the digital part stays tiny.
+- **Leak less** — the sensor records a compressed *measurement*, not a viewable photo of the scene. *(This is something we measure, not a privacy guarantee — see [Honest scope](#honest-scope--what-this-is-and-is-not).)*
+- **Prove what happened** — every run emits a tamper-evident *receipt* (a cryptographic fingerprint), so a result is a reproducible experiment, not just a claim.
+
+Today this is a **software simulator written in Rust** — the physics, the training, and the receipts are all real and reproducible; building the actual glass is on the roadmap. You can try it right now in your browser (no install) via the **[live demo](https://ruvnet.github.io/PhotonLayer/)**, or run a 30-line tour locally:
+
+```sh
+cargo run --release --example hello_optics -p photonlayer-core
+```
+
+The rest of this README gets progressively more technical — keep reading for the sharp framing, the measured results, and the honest caveats.
+
+---
+
 ## The wedge
 
 PhotonLayer is **not** "an optical neural network." It is **auditable optical compression for task-useful sensing**: a learned phase mask performs a trained analog transform on the incoming light, a small sensor reads a compressed measurement, and a tiny digital decoder produces the decision. The measurement need not look like the scene.
