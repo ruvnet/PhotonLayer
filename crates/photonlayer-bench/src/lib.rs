@@ -14,6 +14,7 @@ pub mod baselines;
 pub mod decoder;
 pub mod diffdetect;
 pub mod grad_adam;
+pub mod grad_cascade;
 pub mod grad_train;
 pub mod learn;
 pub mod mnist;
@@ -26,6 +27,9 @@ pub mod verification;
 pub use baselines::{run_classification, run_compression, BenchReport, VariantResult};
 pub use decoder::{frame_features, NearestCentroid};
 pub use diffdetect::{DiffDetector, Region};
+pub use grad_cascade::{
+    train_cascade_grad, Cascade, CascadeSample, CascadeTrainConfig, CascadeTrainOutcome,
+};
 pub use grad_train::{
     build_grad_samples, train_mask_grad, GradSample, GradTrainConfig, GradTrainOutcome,
 };

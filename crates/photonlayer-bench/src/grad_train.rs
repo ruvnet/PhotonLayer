@@ -46,7 +46,7 @@ pub struct LinearHead {
 }
 
 impl LinearHead {
-    fn zeros(dim: usize) -> Self {
+    pub fn zeros(dim: usize) -> Self {
         Self {
             w: vec![0.0; CLASSES * dim],
             b: vec![0.0; CLASSES],
@@ -55,7 +55,7 @@ impl LinearHead {
     }
 
     /// Logits `z = W·f + b` (length CLASSES), fixed accumulation order.
-    fn logits(&self, f: &[f32]) -> Vec<f32> {
+    pub fn logits(&self, f: &[f32]) -> Vec<f32> {
         let mut z = self.b.clone();
         for c in 0..CLASSES {
             let row = &self.w[c * self.dim..(c + 1) * self.dim];
