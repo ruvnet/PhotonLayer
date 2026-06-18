@@ -1,0 +1,37 @@
+[package]
+name = "photonlayer-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Deterministic optical-AI front end in pure Rust: a learned phase mask compresses light into task-useful sensor pixels."
+keywords = ["optics", "optical-computing", "computational-imaging", "simulation", "wasm"]
+categories = ["science", "simulation"]
+readme = "README.md"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+blake3 = "1.8"
+thiserror = "2.0"
+
+[dev-dependencies]
+# Golden / determinism tests only use std.
+
+[features]
+default = ["std"]
+std = []
+
+[lints.rust]
+unexpected_cfgs = { level = "allow", priority = -1 }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = 0 }
+suspicious = { level = "deny", priority = 0 }
+pedantic = { level = "allow", priority = -2 }
+needless_range_loop = "allow"
+manual_range_contains = "allow"
+too_many_arguments = "allow"
