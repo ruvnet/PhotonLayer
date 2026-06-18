@@ -287,6 +287,161 @@ pub fn simulate(
     })
 }
 
+/// One-call compression result for the browser playground (ADR-260 product demo).
+///
+/// Bundles everything the side-by-side UI needs from a single optical run:
+/// the original image (for display), the pooled sensor measurement rendered as
+/// a noise-like image, the byte-count reduction, and the deterministic frame
+/// hash that doubles as a verifiable receipt.
+#[wasm_bindgen]
+pub struct CompressResult {
+    orig_width: usize,
+    orig_height: usize,
+    orig_buf: Vec<u8>,
+    meas_width: usize,
+    meas_height: usize,
+    measurement_buf: Vec<u8>,
+    input_bytes: usize,
+    measurement_bytes: usize,
+    frame_hash: String,
+}
+
+#[wasm_bindgen]
+impl CompressResult {
+    /// Width of the original input image.
+    #[wasm_bindgen(getter)]
+    pub fn orig_width(&self) -> u32 {
+        self.orig_width as u32
+    }
+
+    /// Height of the original input image.
+    #[wasm_bindgen(getter)]
+    pub fn orig_height(&self) -> u32 {
+        self.orig_height as u32
+    }
+
+    /// Original grayscale image, row-major (canvas-ready).
+    #[wasm_bindgen(getter)]
+    pub fn orig_buf(&self) -> Vec<u8> {
+        self.orig_buf.clone()
+    }
+
+    /// Width of the pooled sensor measurement.
+    #[wasm_bindgen(getter)]
+    pub fn meas_width(&self) -> u32 {
+        self.meas_width as u32
+    }
+
+    /// Height of the pooled sensor measurement.
+    #[wasm_bindgen(getter)]
+    pub fn meas_height(&self) -> u32 {
+        self.meas_height as u32
+    }
+
+    /// Pooled sensor measurement ("strange pattern"), normalized 0..255.
+    #[wasm_bindgen(getter)]
+    pub fn measurement_buf(&self) -> Vec<u8> {
+        self.measurement_buf.clone()
+    }
+
+    /// Raw byte count of the original grayscale image (`w * h`).
+    #[wasm_bindgen(getter)]
+    pub fn input_bytes(&self) -> u32 {
+        self.input_bytes as u32
+    }
+
+    /// Byte count of the stored pooled measurement (`meas_w * meas_h`).
+    #[wasm_bindgen(getter)]
+    pub fn measurement_bytes(&self) -> u32 {
+        self.measurement_bytes as u32
+    }
+
+    /// BLAKE3 hex digest of the measurement frame — the verifiable receipt.
+    #[wasm_bindgen(getter)]
+    pub fn frame_hash(&self) -> String {
+        self.frame_hash.clone()
+    }
+}
+
+/// Run the full optical-compression pipeline in one call (browser playground).
+///
+/// Applies a learned/preset phase mask, propagates over `distance_mm`, captures
+/// the sensor intensity, and average-pools it by `pool` (the data-reduction
+/// lever) into a smaller measurement. Returns a [`CompressResult`] with both
+/// images, the byte reduction, and the deterministic frame hash (receipt).
+///
+/// # Parameters
+/// * `image_bytes` — row-major grayscale u8 pixels (len must equal `w * h`).
+/// * `w` / `h` — image dimensions (power-of-two, ≤ `MAX_GRID_DIM`).
+/// * `mask_kind` — `"identity"`, `"random"`, or `"lens"`.
+/// * `mask_seed` — seed for `"random"` masks.
+/// * `mask_strength` — focal strength for `"lens"` masks.
+/// * `distance_mm` — propagation distance in millimetres.
+/// * `pool` — average-pool / binning factor (1 = no pooling). Must divide `w`/`h`.
+///
+/// Re-running with identical arguments yields an identical `frame_hash`, which
+/// is exactly what the UI's "verify" button checks.
+///
+/// Throws a JS error string on any failure.
+#[wasm_bindgen]
+pub fn compress(
+    image_bytes: &[u8],
+    w: u32,
+    h: u32,
+    mask_kind: &str,
+    mask_seed: u64,
+    mask_strength: f32,
+    distance_mm: f32,
+    pool: u32,
+) -> Result<CompressResult, JsValue> {
+    let (width, height) = (w as usize, h as usize);
+
+    // Bound dimensions before any allocation (mirrors run_trace hardening).
+    let max = photonlayer_core::config::MAX_GRID_DIM;
+    if width == 0 || height == 0 || width > max || height > max {
+        return Err(JsValue::from_str(&format!(
+            "image dimensions must be in 1..={max}"
+        )));
+    }
+
+    // Build a demo config, then apply the interactive distance + pooling knobs.
+    let mut config = OpticalConfig::demo(width, height);
+    if !distance_mm.is_finite() {
+        return Err(JsValue::from_str("distance_mm must be finite"));
+    }
+    config.propagation_mm = distance_mm;
+    config.detector.binning = (pool.max(1)) as usize;
+    config
+        .validate()
+        .map_err(|e| JsValue::from_str(&format!("invalid config: {e}")))?;
+
+    // Build input image + mask, then run the trace.
+    let img = InputImage::from_gray_u8(width, height, image_bytes)
+        .map_err(|e| JsValue::from_str(&format!("image error: {e}")))?;
+    let mask = build_mask(width, height, mask_kind, mask_seed, mask_strength);
+    let trace = ScalarSimulator
+        .trace(&img, &mask, &config)
+        .map_err(|e| JsValue::from_str(&format!("simulation error: {e}")))?;
+
+    // Encode the original (incoming amplitude) and pooled measurement.
+    let orig_buf = field_amplitude_u8(&trace.incoming);
+    let measurement_buf = normalize_to_u8(&trace.frame.intensity);
+    let meas_width = trace.frame.width;
+    let meas_height = trace.frame.height;
+
+    Ok(CompressResult {
+        orig_width: width,
+        orig_height: height,
+        orig_buf,
+        meas_width,
+        meas_height,
+        measurement_buf,
+        input_bytes: width * height,
+        measurement_bytes: meas_width * meas_height,
+        frame_hash: trace.frame.frame_hash.clone(),
+    })
+}
+
 /// Parse an [`ExperimentReceipt`] from JSON and verify its internal consistency.
 ///
 /// Returns `true` iff the receipt's `rvf_receipt_hash` matches a fresh
@@ -452,6 +607,40 @@ mod tests {
     fn unknown_mask_kind_falls_back_to_identity() {
         let m = build_mask(8, 8, "nonexistent_kind", 0, 0.0);
         assert!(m.phase_radians.iter().all(|&p| p == 0.0));
+    }
+
+    // ── Compress (playground one-call path) ────────────────────────────────
+
+    #[test]
+    fn compress_pools_and_reduces_bytes() {
+        // pool=4 on a 32×32 image → 8×8 measurement → 16× fewer bytes.
+        let n = 32usize;
+        let img = checkerboard_u8(n);
+        let r = compress(&img, n as u32, n as u32, "random", 7, 1.0, 10.0, 4).unwrap();
+        assert_eq!(r.input_bytes, n * n);
+        assert_eq!(r.measurement_bytes, 8 * 8);
+        assert!(r.measurement_bytes < r.input_bytes, "measurement must be smaller");
+        assert_eq!(r.measurement_buf.len(), 8 * 8);
+        assert_eq!(r.orig_buf.len(), n * n);
+    }
+
+    #[test]
+    fn compress_is_deterministic() {
+        let n = 32usize;
+        let img = checkerboard_u8(n);
+        let a = compress(&img, n as u32, n as u32, "random", 99, 1.0, 12.0, 2).unwrap();
+        let b = compress(&img, n as u32, n as u32, "random", 99, 1.0, 12.0, 2).unwrap();
+        assert_eq!(a.frame_hash, b.frame_hash, "verify button relies on this");
+        assert_eq!(a.measurement_buf, b.measurement_buf);
+    }
+
+    #[test]
+    fn compress_distance_changes_hash() {
+        let n = 32usize;
+        let img = checkerboard_u8(n);
+        let a = compress(&img, n as u32, n as u32, "random", 1, 1.0, 5.0, 1).unwrap();
+        let b = compress(&img, n as u32, n as u32, "random", 1, 1.0, 50.0, 1).unwrap();
+        assert_ne!(a.frame_hash, b.frame_hash, "distance must affect the frame");
     }
 
     // ── Receipt verification ───────────────────────────────────────────────

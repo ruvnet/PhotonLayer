@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PhotonLayer — Optical Compression Playground</title>
+  <meta name="description" content="Task-trained optics: capture less, decide faster, prove what happened. A real in-browser WASM demo." />
+  <link rel="stylesheet" href="./app.css" />
+</head>
+<body>
+  <header>
+    <h1>PhotonLayer</h1>
+    <p class="tagline">Task-trained optics: capture less, decide faster, prove what happened.</p>
+    <p class="sub">
+      This page runs the real PhotonLayer optical simulator compiled to WebAssembly —
+      no server, no mocked results. A preset phase mask transforms the light, it
+      propagates to a sensor, and a small pooled measurement is captured.
+    </p>
+  </header>
+
+  <main>
+    <section class="controls" aria-label="controls">
+      <div class="control-row">
+        <label for="preset">Input</label>
+        <select id="preset">
+          <option value="digit">Digit-like "7"</option>
+          <option value="shape">Diamond shape</option>
+          <option value="checker">Checkerboard</option>
+        </select>
+      </div>
+
+      <div class="control-row">
+        <label for="mask">Mask</label>
+        <select id="mask">
+          <option value="random" selected>Learned (pseudo-random)</option>
+          <option value="lens">Lens</option>
+          <option value="identity">None (identity)</option>
+        </select>
+      </div>
+
+      <div class="control-row">
+        <label for="seed">Mask seed <output id="seedOut">7</output></label>
+        <input type="range" id="seed" min="1" max="64" value="7" step="1" />
+      </div>
+
+      <div class="control-row">
+        <label for="dist">Propagation distance <output id="distOut">10 mm</output></label>
+        <input type="range" id="dist" min="1" max="80" value="10" step="1" />
+      </div>
+
+      <div class="control-row">
+        <label for="pool">Sensor pooling <output id="poolOut">4× (16:1)</output></label>
+        <input type="range" id="pool" min="0" max="3" value="2" step="1" />
+        <span class="hint">how much the sensor averages — bigger = smaller measurement</span>
+      </div>
+    </section>
+
+    <section class="panels">
+      <figure class="panel">
+        <figcaption>1 · Original input</figcaption>
+        <canvas id="origCanvas" width="64" height="64" aria-label="original input image"></canvas>
+        <p class="bytes" id="origBytes">— bytes</p>
+      </figure>
+
+      <figure class="panel">
+        <figcaption>2 · Sensor measurement</figcaption>
+        <canvas id="measCanvas" width="64" height="64" aria-label="sensor measurement (noise-like)"></canvas>
+        <p class="bytes" id="measBytes">— bytes</p>
+        <p class="reduction" id="reduction">—</p>
+      </figure>
+
+      <figure class="panel receipt">
+        <figcaption>3 · Receipt</figcaption>
+        <p class="recipt-label">BLAKE3 of run inputs + measurement</p>
+        <code id="hash" class="hash">—</code>
+        <button id="verifyBtn" type="button">Verify (re-run)</button>
+        <p id="verifyResult" class="verify-result">&nbsp;</p>
+      </figure>
+    </section>
+
+    <p class="honesty">
+      PhotonLayer stores a learned measurement, not the image. No privacy or
+      security guarantee is claimed. The receipt proves the run is deterministic
+      (the same inputs reproduce the same measurement byte-for-byte) — it is an
+      integrity / anti-swap check, not encryption.
+    </p>
+
+    <p class="status" id="status">Loading WebAssembly module…</p>
+  </main>
+
+  <footer>
+    <p>
+      Runs <code id="ver">photonlayer-wasm</code> entirely in your browser.
+      Source: <a href="https://github.com/ruvnet/PhotonLayer">github.com/ruvnet/PhotonLayer</a>
+    </p>
+  </footer>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "photonlayer-wasm",
+  "type": "module",
+  "collaborators": [
+    "Ruvector Team"
+  ],
+  "description": "PhotonLayer WASM bindings for browser optics playback and receipt verification (ADR-260 Phase 3)",
+  "version": "0.1.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ruvnet/PhotonLayer"
+  },
+  "files": [
+    "photonlayer_bg.wasm",
+    "photonlayer.js",
+    "photonlayer.d.ts"
+  ],
+  "main": "photonlayer.js",
+  "types": "photonlayer.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

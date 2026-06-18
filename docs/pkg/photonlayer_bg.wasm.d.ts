@@ -1,0 +1,30 @@
+/* tslint:disable */
+/* eslint-disable */
+export const memory: WebAssembly.Memory;
+export const __wbg_compressresult_free: (a: number, b: number) => void;
+export const __wbg_wasmtraceresult_free: (a: number, b: number) => void;
+export const compress: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint, i: number, j: number, k: number) => void;
+export const compressresult_frame_hash: (a: number, b: number) => void;
+export const compressresult_input_bytes: (a: number) => number;
+export const compressresult_meas_height: (a: number) => number;
+export const compressresult_meas_width: (a: number) => number;
+export const compressresult_measurement_buf: (a: number, b: number) => void;
+export const compressresult_measurement_bytes: (a: number) => number;
+export const compressresult_orig_buf: (a: number, b: number) => void;
+export const compressresult_orig_height: (a: number) => number;
+export const compressresult_orig_width: (a: number) => number;
+export const default_config_json: (a: number, b: number, c: number) => void;
+export const photonlayer_version: (a: number) => void;
+export const simulate: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: bigint, i: number, j: number, k: number) => void;
+export const verify_receipt_json: (a: number, b: number) => number;
+export const wasmtraceresult_frame_hash: (a: number, b: number) => void;
+export const wasmtraceresult_height: (a: number) => number;
+export const wasmtraceresult_incoming_buf: (a: number, b: number) => void;
+export const wasmtraceresult_mask_buf: (a: number, b: number) => void;
+export const wasmtraceresult_masked_intensity_buf: (a: number, b: number) => void;
+export const wasmtraceresult_sensor_buf: (a: number, b: number) => void;
+export const wasmtraceresult_width: (a: number) => number;
+export const __wbindgen_add_to_stack_pointer: (a: number) => number;
+export const __wbindgen_export: (a: number, b: number) => number;
+export const __wbindgen_export2: (a: number, b: number, c: number, d: number) => number;
+export const __wbindgen_export3: (a: number, b: number, c: number) => void;

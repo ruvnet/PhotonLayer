@@ -11,6 +11,12 @@ description = "PhotonLayer WASM bindings for browser optics playback and receipt
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+# The bundled wasm-opt predates bulk-memory; rustc emits memory.copy/fill by
+# default. Skip the optional optimizer pass — the unoptimized module is valid
+# and small enough for a browser demo.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
 [dependencies]
 photonlayer-core = { version = "0.1.0", path = "../photonlayer-core" }
 wasm-bindgen = "0.2"
