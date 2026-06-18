@@ -10,26 +10,23 @@
 //! Eval keeps the deterministic nearest-centroid (NCC) decoder so the published
 //! metric stays apples-to-apples with the hill-climb baseline. Training uses a
 //! small differentiable head over the SAME pooled sensor readout the NCC sees:
-//!
-//! ```text
-//!   image -> field u0 -> mask e^{iθ} -> P(.) -> |.|^2 = I
-//!         -> avg-pool to sensor×sensor -> L2-normalize = f   (same as NCC eval)
-//!         -> logits z = W·f + b -> softmax p -> CE loss
-//! ```
+//! `image -> u0 -> mask e^{iθ} -> P(.) -> |.|^2 -> avg-pool -> L2-norm = f ->
+//! logits W·f+b -> softmax -> CE`.
 //!
 //! The whole optical half of the chain (`|.|^2`, propagation adjoint, the
 //! `2·Im(conj(u1)·gback)` phase rule) is exactly what [`phase_gradient`]
 //! computes for the linear-in-intensity loss `L = Σ_j w[j]·I[j]`. We only have
 //! to produce the per-pixel intensity weight `w[j] = ∂L/∂I[j]` by backpropagating
-//! CE → softmax → linear head → L2-norm → average-pool, then one call to
+//! CE → softmax → linear head → (L2-norm) → average-pool, then one call to
 //! `phase_gradient(prop, u0, θ, w)` yields `∂L/∂θ` through the validated adjoint.
 //! Nothing in the optical core is reimplemented or re-trusted here.
 //!
 //! Determinism: fixed minibatch order, fixed reduction order, no FMA/SIMD, a
-//! seeded plain-Rust [`Adam`](crate::grad_adam::Adam). Same data + seed + budget
-//! => same mask. The end-to-end FD gradient check (below) is the de-risk gate.
+//! seeded plain-Rust [`Adam`](crate::grad_adam::Adam). The end-to-end FD
+//! gradient check (below) is the de-risk gate — it validates both the
+//! L2-normalized and raw-pool feature paths.
 
-use crate::grad_adam::Adam;
+use crate::grad_adam::{l2_normalize, softmax, Adam, Pooling};
 use crate::synthetic::Sample;
 use photonlayer_core::complex::Complex;
 use photonlayer_core::config::OpticalConfig;
@@ -38,71 +35,6 @@ use photonlayer_core::propagate::{phase_gradient, Propagator};
 
 /// Number of MNIST digit classes (kept local to avoid a cross-module dep).
 const CLASSES: usize = 10;
-
-/// Average-pool a row-major `w×h` intensity grid to `s×s`, replicating
-/// [`crate::decoder::pool_features`]'s exact box boundaries, and return both the
-/// pooled vector and, for each output cell, the list of source indices + the
-/// `1/count` weight so the backward pass can scatter `∂L/∂f_raw` onto pixels.
-struct Pooling {
-    /// `s*s` boxes; each box is `(src_indices, inv_count)`.
-    boxes: Vec<(Vec<usize>, f32)>,
-    sensor: usize,
-}
-
-impl Pooling {
-    fn new(w: usize, h: usize, sensor: usize) -> Self {
-        let mut boxes = Vec::with_capacity(sensor * sensor);
-        for oy in 0..sensor {
-            for ox in 0..sensor {
-                let x0 = ox * w / sensor;
-                let x1 = ((ox + 1) * w / sensor).max(x0 + 1).min(w);
-                let y0 = oy * h / sensor;
-                let y1 = ((oy + 1) * h / sensor).max(y0 + 1).min(h);
-                let mut idx = Vec::new();
-                for y in y0..y1 {
-                    for x in x0..x1 {
-                        idx.push(y * w + x);
-                    }
-                }
-                let inv = if idx.is_empty() { 0.0 } else { 1.0 / idx.len() as f32 };
-                boxes.push((idx, inv));
-            }
-        }
-        Self { boxes, sensor }
-    }
-
-    fn dim(&self) -> usize {
-        self.sensor * self.sensor
-    }
-
-    /// Forward pool: `intensity` (w*h) -> raw pooled means (s*s).
-    fn forward(&self, intensity: &[f32]) -> Vec<f32> {
-        self.boxes
-            .iter()
-            .map(|(idx, inv)| {
-                let mut acc = 0.0f32;
-                for &j in idx {
-                    acc += intensity[j];
-                }
-                acc * *inv
-            })
-            .collect()
-    }
-}
-
-/// L2-normalize in place, returning the pre-norm length (1.0 if degenerate) so
-/// the backward pass can use it. Matches `decoder::pool_features`'s 1e-9 guard.
-fn l2_normalize(v: &mut [f32]) -> f32 {
-    let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if n > 1e-9 {
-        for x in v.iter_mut() {
-            *x /= n;
-        }
-        n
-    } else {
-        1.0
-    }
-}
 
 /// Linear softmax head over the pooled sensor readout. Plain f32, fixed index
 /// order; the only trainable digital params (eval discards it for the NCC).
@@ -137,18 +69,6 @@ impl LinearHead {
     }
 }
 
-/// Numerically-stable softmax (subtract max), fixed order.
-fn softmax(z: &[f32]) -> Vec<f32> {
-    let m = z.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let mut e: Vec<f32> = z.iter().map(|&v| (v - m).exp()).collect();
-    let s: f32 = e.iter().sum();
-    let inv = 1.0 / s.max(1e-30);
-    for v in &mut e {
-        *v *= inv;
-    }
-    e
-}
-
 /// One sample's precomputed incident field `u0` (image -> centered amplitude),
 /// reused every epoch (it never changes — only θ trains).
 pub struct GradSample {
@@ -171,13 +91,11 @@ pub fn build_grad_samples(samples: &[Sample], cfg: &OpticalConfig) -> Vec<GradSa
         .collect()
 }
 
-/// Forward the differentiable head for one sample and return
-/// `(loss, dL/dI per pixel)` — the per-pixel intensity weight `w[j]` that
-/// [`phase_gradient`] consumes. Also accumulates the head's own `∂L/∂W,∂L/∂b`.
-///
-/// Steps backpropagated here (everything DIGITAL after the sensor):
-///   CE -> softmax -> linear head -> L2-norm -> average-pool -> ∂L/∂I.
-/// The OPTICAL half (`∂I/∂θ`) is delegated to the proven `phase_gradient`.
+/// Forward the differentiable head for one sample and return `(loss, dL/dI per
+/// pixel)` — the per-pixel weight `w[j]` that [`phase_gradient`] consumes — also
+/// accumulating the head's own `∂L/∂W,∂L/∂b`. Backprops the DIGITAL tail
+/// (CE→softmax→head→(L2-norm)→avg-pool→∂L/∂I); the OPTICAL half (`∂I/∂θ`) is the
+/// proven `phase_gradient`'s job. `raw_pool` skips the L2-norm Jacobian.
 #[allow(clippy::too_many_arguments)]
 fn sample_forward_backward(
     prop: &Propagator,
@@ -186,6 +104,7 @@ fn sample_forward_backward(
     u0: &[Complex],
     theta: &[f32],
     label: usize,
+    raw_pool: bool,
     grad_w: &mut [f32],
     grad_b: &mut [f32],
 ) -> (f32, Vec<f32>) {
@@ -199,12 +118,18 @@ fn sample_forward_backward(
     prop.propagate_into(&mut y).expect("forward propagate");
     let intensity: Vec<f32> = y.iter().map(|c| c.norm_sqr()).collect();
 
-    // --- Pool + L2-normalize -> features f (identical to decoder::pool_features). ---
+    // --- Pool -> features f. raw_pool=false L2-normalizes (matches the NCC eval
+    // feature exactly); raw_pool=true feeds raw pooled intensities. ---
     let f_raw = pool.forward(&intensity);
-    // Pre-norm length needed for the backward Jacobian (matches the 1e-9 guard).
-    let norm = f_raw.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
+    let norm = if raw_pool {
+        1.0 // no normalization; f == f_raw, Jacobian is identity
+    } else {
+        f_raw.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9)
+    };
     let mut f = f_raw.clone();
-    l2_normalize(&mut f);
+    if !raw_pool {
+        l2_normalize(&mut f);
+    }
 
     // --- Head forward: logits -> softmax -> CE. ---
     let z = head.logits(&f);
@@ -226,14 +151,18 @@ fn sample_forward_backward(
         }
     }
 
-    // --- L2-norm backward: f = f_raw / norm.
+    // --- Pool-feature backward -> dL/df_raw.
+    // raw_pool: identity (df_raw = df). Else L2-norm Jacobian:
     // dL/df_raw = (df - (df·f) f) / norm, with f the normalized vector. ---
-    let dot: f32 = df.iter().zip(f.iter()).map(|(a, b)| a * b).sum();
-    let df_raw: Vec<f32> = df
-        .iter()
-        .zip(f.iter())
-        .map(|(&g, &fk)| (g - dot * fk) / norm)
-        .collect();
+    let df_raw: Vec<f32> = if raw_pool {
+        df
+    } else {
+        let dot: f32 = df.iter().zip(f.iter()).map(|(a, b)| a * b).sum();
+        df.iter()
+            .zip(f.iter())
+            .map(|(&g, &fk)| (g - dot * fk) / norm)
+            .collect()
+    };
 
     // --- Average-pool backward: scatter dL/df_raw[p]*inv onto member pixels.
     // This vector is exactly w[j] = ∂L/∂I[j]. ---
@@ -258,6 +187,16 @@ pub struct GradTrainConfig {
     pub lr_head: f32,
     pub sensor: usize,
     pub seed: u64,
+    /// Train the head on the RAW average-pooled readout (no L2-normalize).
+    /// L2-norm injects a `1/‖f_raw‖` coupling that ties every pixel gradient
+    /// together and discards the absolute-intensity signal the optics encodes;
+    /// `true` trains on raw pooled intensities. EVAL always L2-normalizes via
+    /// the NCC decoder, so the published metric stays apples-to-apples either
+    /// way — only the TRAIN-time feature differs.
+    pub raw_pool: bool,
+    /// Adam epsilon. `1e-7` avoids `v_hat` underflow that can freeze the many
+    /// near-zero-gradient dark mask cells; `1e-8` is the textbook default.
+    pub adam_eps: f32,
 }
 
 impl Default for GradTrainConfig {
@@ -269,6 +208,8 @@ impl Default for GradTrainConfig {
             lr_head: 0.05,
             sensor: 8,
             seed: 0x6D_ADA_11,
+            raw_pool: false,
+            adam_eps: 1e-8,
         }
     }
 }
@@ -289,6 +230,7 @@ fn mean_ce(
     head: &LinearHead,
     theta: &[f32],
     data: &[GradSample],
+    raw_pool: bool,
 ) -> f32 {
     // Throwaway grad buffers — we only read the returned loss here.
     let mut dummy_w = vec![0.0f32; head.w.len()];
@@ -296,7 +238,7 @@ fn mean_ce(
     let mut total = 0.0f32;
     for s in data {
         let (loss, _) = sample_forward_backward(
-            prop, pool, head, &s.u0, theta, s.label, &mut dummy_w, &mut dummy_b,
+            prop, pool, head, &s.u0, theta, s.label, raw_pool, &mut dummy_w, &mut dummy_b,
         );
         total += loss;
     }
@@ -322,9 +264,9 @@ pub fn train_mask_grad(
     let mut theta = theta0.to_vec();
     let mut head = LinearHead::zeros(dim);
 
-    let mut adam_theta = Adam::new(theta.len(), cfg.lr_mask);
-    let mut adam_w = Adam::new(head.w.len(), cfg.lr_head);
-    let mut adam_b = Adam::new(head.b.len(), cfg.lr_head);
+    let mut adam_theta = Adam::with_eps(theta.len(), cfg.lr_mask, cfg.adam_eps);
+    let mut adam_w = Adam::with_eps(head.w.len(), cfg.lr_head, cfg.adam_eps);
+    let mut adam_b = Adam::with_eps(head.b.len(), cfg.lr_head, cfg.adam_eps);
 
     let mut loss_curve = Vec::with_capacity(cfg.epochs);
     let n = data.len();
@@ -346,7 +288,7 @@ pub fn train_mask_grad(
             for k in start..end {
                 let s = &data[order[k]];
                 let (_loss, w_pix) = sample_forward_backward(
-                    prop, &pool, &head, &s.u0, &theta, s.label, &mut g_w, &mut g_b,
+                    prop, &pool, &head, &s.u0, &theta, s.label, cfg.raw_pool, &mut g_w, &mut g_b,
                 );
                 // Optical half via the PROVEN adjoint: dL/dθ for this sample.
                 let g = phase_gradient(prop, &s.u0, &theta, &w_pix)
@@ -370,7 +312,7 @@ pub fn train_mask_grad(
             start = end;
         }
 
-        loss_curve.push(mean_ce(prop, &pool, &head, &theta, data));
+        loss_curve.push(mean_ce(prop, &pool, &head, &theta, data, cfg.raw_pool));
     }
 
     GradTrainOutcome { theta, loss_curve, width, height }
@@ -428,68 +370,68 @@ mod tests {
             .collect();
         let theta: Vec<f32> = (0..n * n).map(|_| rnd(&mut st) * 6.283).collect();
         let mut head = LinearHead::zeros(dim);
-        for w in head.w.iter_mut() {
-            *w = (rnd(&mut st) - 0.5) * 0.8;
-        }
-        for b in head.b.iter_mut() {
-            *b = (rnd(&mut st) - 0.5) * 0.2;
-        }
+        head.w.iter_mut().for_each(|w| *w = (rnd(&mut st) - 0.5) * 0.8);
+        head.b.iter_mut().for_each(|b| *b = (rnd(&mut st) - 0.5) * 0.2);
         let label = 1usize;
 
-        // Analytic dL/dθ.
-        let mut gw = vec![0.0f32; head.w.len()];
-        let mut gb = vec![0.0f32; head.b.len()];
-        let (_l0, w_pix) =
-            sample_forward_backward(&prop, &pool, &head, &u0, &theta, label, &mut gw, &mut gb);
-        let analytic = phase_gradient(&prop, &u0, &theta, &w_pix).unwrap();
+        // Validate BOTH feature paths: L2-normalized (eval-matched) and raw pool.
+        for raw_pool in [false, true] {
+            let mut gw = vec![0.0f32; head.w.len()];
+            let mut gb = vec![0.0f32; head.b.len()];
+            let (_l0, w_pix) = sample_forward_backward(
+                &prop, &pool, &head, &u0, &theta, label, raw_pool, &mut gw, &mut gb,
+            );
+            let analytic = phase_gradient(&prop, &u0, &theta, &w_pix).unwrap();
 
-        // Pure CE loss as a function of θ (f64 reduction for a fair FD floor).
-        let ce_loss = |th: &[f32]| -> f64 {
-            let mut y: Vec<Complex> = u0
-                .iter()
-                .zip(th.iter())
-                .map(|(&c, &t)| c * Complex::from_phase(t))
-                .collect();
-            prop.propagate_into(&mut y).unwrap();
-            let intensity: Vec<f32> = y.iter().map(|c| c.norm_sqr()).collect();
-            let mut f = pool.forward(&intensity);
-            l2_normalize(&mut f);
-            let z = head.logits(&f);
-            let p = softmax(&z);
-            -(p[label].max(1e-30) as f64).ln()
-        };
+            // Pure CE loss as a function of θ (f64 reduction for a fair FD floor).
+            let ce_loss = |th: &[f32]| -> f64 {
+                let mut y: Vec<Complex> = u0
+                    .iter()
+                    .zip(th.iter())
+                    .map(|(&c, &t)| c * Complex::from_phase(t))
+                    .collect();
+                prop.propagate_into(&mut y).unwrap();
+                let intensity: Vec<f32> = y.iter().map(|c| c.norm_sqr()).collect();
+                let mut f = pool.forward(&intensity);
+                if !raw_pool {
+                    l2_normalize(&mut f);
+                }
+                let z = head.logits(&f);
+                let p = softmax(&z);
+                -(p[label].max(1e-30) as f64).ln()
+            };
 
-        // Central difference on the entries that carry real signal (|g| above a
-        // floor); tiny entries sit in the f32 FD noise and are skipped, exactly
-        // as the core's proven gradient check does.
-        let eps = 1e-2f64;
-        let gmax = analytic.iter().cloned().fold(0.0f32, |m, v| m.max(v.abs()));
-        assert!(gmax > 1e-5, "gradient degenerate (all ~0)");
-        let floor = 0.05 * gmax;
+            // Central difference; skip tiny entries dominated by the f32 FD
+            // floor, exactly as the core's proven gradient check does.
+            let eps = 1e-2f64;
+            let gmax = analytic.iter().cloned().fold(0.0f32, |m, v| m.max(v.abs()));
+            assert!(gmax > 1e-5, "raw_pool={raw_pool}: gradient degenerate (all ~0)");
+            let floor = 0.05 * gmax;
 
-        let mut num = 0.0f64;
-        let mut den = 0.0f64;
-        for k in 0..n * n {
-            let a = analytic[k];
-            let mut tp = theta.clone();
-            tp[k] += eps as f32;
-            let mut tm = theta.clone();
-            tm[k] -= eps as f32;
-            let fd = ((ce_loss(&tp) - ce_loss(&tm)) / (2.0 * eps)) as f32;
-            num += (a - fd) as f64 * (a - fd) as f64;
-            den += a as f64 * a as f64;
-            if a.abs() >= floor {
-                let rel = (a - fd).abs() / a.abs().max(fd.abs());
-                assert!(
-                    rel <= 5e-2,
-                    "CE grad mismatch at {k}: analytic={a:e} fd={fd:e} rel={rel:e}"
-                );
+            let mut num = 0.0f64;
+            let mut den = 0.0f64;
+            for k in 0..n * n {
+                let a = analytic[k];
+                let mut tp = theta.clone();
+                tp[k] += eps as f32;
+                let mut tm = theta.clone();
+                tm[k] -= eps as f32;
+                let fd = ((ce_loss(&tp) - ce_loss(&tm)) / (2.0 * eps)) as f32;
+                num += (a - fd) as f64 * (a - fd) as f64;
+                den += a as f64 * a as f64;
+                if a.abs() >= floor {
+                    let rel = (a - fd).abs() / a.abs().max(fd.abs());
+                    assert!(
+                        rel <= 5e-2,
+                        "raw_pool={raw_pool} CE grad mismatch at {k}: analytic={a:e} fd={fd:e} rel={rel:e}"
+                    );
+                }
             }
+            let rel_l2 = (num / den.max(1e-30)).sqrt();
+            assert!(
+                rel_l2 <= 1e-2,
+                "raw_pool={raw_pool}: end-to-end CE gradient disagrees with FD: rel_L2={rel_l2:e}"
+            );
         }
-        let rel_l2 = (num / den.max(1e-30)).sqrt();
-        assert!(
-            rel_l2 <= 1e-2,
-            "end-to-end CE gradient disagrees with FD: rel_L2={rel_l2:e}"
-        );
     }
 }

@@ -128,6 +128,8 @@ fn training_reduces_loss() {
         lr_head: 0.1,
         sensor: 4,
         seed: 7,
+        raw_pool: true,
+        adam_eps: 1e-7,
     };
     let out = train_mask_grad(&prop, n, n, &data, &theta0, &gc);
     let first = out.loss_curve.first().copied().unwrap();
@@ -154,6 +156,8 @@ fn mnist_gradient_smoke() {
         lr_head: 0.1,
         sensor,
         seed: 0x6E157,
+        raw_pool: true,
+        adam_eps: 1e-7,
     };
     let r = run_mnist_grad(&train, &test, grid, sensor, &gc);
     print_table(&r);
@@ -189,6 +193,11 @@ fn mnist_gradient_full() {
     let Some((train, test)) = load_subsets(&dir, 400, 200, 20, grid) else {
         panic!("MNIST cache not found at {} - fetch IDX files (see header) first", dir.display());
     };
+    // Published headline config. The TRAIN-time feature is L2-normalized to
+    // MATCH the NCC eval feature (train/eval consistency): the pool_ablation
+    // test below measures L2-norm beating raw-pool by ~+2.7pp here precisely
+    // because eval uses the L2-normalized NCC. Adam eps=1e-7 avoids v_hat
+    // underflow on the many near-zero-gradient dark mask cells.
     let gc = GradTrainConfig {
         epochs: 40,
         batch: 64,
@@ -196,6 +205,8 @@ fn mnist_gradient_full() {
         lr_head: 0.05,
         sensor,
         seed: 0x6E157,
+        raw_pool: false,
+        adam_eps: 1e-7,
     };
     let t0 = std::time::Instant::now();
     let r = run_mnist_grad(&train, &test, grid, sensor, &gc);
@@ -220,4 +231,41 @@ fn mnist_gradient_full() {
         vs_hc,
         if vs_hc > 0.0 { "GRADIENT WINS" } else { "did not beat hill-climb" }
     );
+}
+
+/// A/B: L2-normalized vs RAW average-pool TRAIN-time readout, all else equal.
+/// Settles whether dropping the L2-norm (which couples every pixel gradient and
+/// divides away absolute intensity) actually helps on the real metric. Both arms
+/// eval with the SAME NCC decoder, so the comparison is clean. Reported, honest.
+#[test]
+#[ignore = "heavy A/B: L2-norm vs raw-pool training readout"]
+fn mnist_gradient_pool_ablation() {
+    let dir = default_cache_dir();
+    let (grid, sensor) = (32usize, 8usize);
+    let Some((train, test)) = load_subsets(&dir, 400, 200, 20, grid) else {
+        panic!("MNIST cache not found at {}", dir.display());
+    };
+    let base = GradTrainConfig {
+        epochs: 40,
+        batch: 64,
+        lr_mask: 0.04,
+        lr_head: 0.01,
+        sensor,
+        seed: 0x6E157,
+        raw_pool: false,
+        adam_eps: 1e-7,
+    };
+    eprintln!("\n[A/B] train-time pooled readout: L2-normalized vs raw (eval NCC identical)");
+    for raw in [false, true] {
+        let gc = GradTrainConfig { raw_pool: raw, ..base };
+        let r = run_mnist_grad(&train, &test, grid, sensor, &gc);
+        eprintln!(
+            "  raw_pool={:<5} -> grad_optical={:.4}  (loss {:.3}->{:.3}, vs hill-climb {:+.4})",
+            raw,
+            r.grad_optical_acc,
+            r.loss_curve.first().copied().unwrap_or(0.0),
+            r.loss_curve.last().copied().unwrap_or(0.0),
+            r.grad_optical_acc - HILLCLIMB_OPTICAL_ACC
+        );
+    }
 }
