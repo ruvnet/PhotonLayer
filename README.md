@@ -9,7 +9,11 @@
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](#license)
 [![Deterministic](https://img.shields.io/badge/output-bit--reproducible-success.svg)](#determinism--receipts)
-[![WASM](https://img.shields.io/badge/wasm-ready-purple.svg)](#crates)
+[![crates.io](https://img.shields.io/badge/crates.io-photonlayer--core-blue.svg)](https://crates.io/crates/photonlayer-core)
+
+### ▶ [Live demo — optical-compression playground](https://ruvnet.github.io/PhotonLayer/)
+
+*Runs entirely in your browser via WASM: shape light through a learned mask, watch it compress to a tiny measurement, and verify the deterministic receipt.*
 
 </div>
 
