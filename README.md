@@ -41,7 +41,27 @@ Real MNIST (public IDX, 4000 train / 2000 **blind** test, balanced 10-class, see
 
 **Config B — the mechanism** (argmax-differential objective, no decoder): isolates the Li/Ozcan differential-detection lever — plain argmax `I⁺` 18.40 % vs differential `I⁺−I⁻` 34.90 % = **+16.5 pp**. (Absolute accuracy is modest by construction; the delta isolates the lever, it is not a headline accuracy.)
 
-Reproduce:
+### Breaking the ceiling — gradient training (the headline)
+
+The hill-climb result above is an **optimizer** ceiling, not an optics limit. Training the **same single phase mask** by **analytic gradient descent** — through a proven adjoint of the diffraction operator (`Propagator::backward_into`, validated by an exact-adjoint identity *and* a finite-difference grad-check) — clears it decisively:
+
+| accuracy @ 16× compression (same NCC eval decoder) | |
+|---|---:|
+| random-init mask | 65.35 % |
+| hill-climb mask (single-mask optimum) | 73.05 % |
+| full-image baseline (matched tiny decoder, 1024 px) | 75.40 % |
+| **gradient-trained optical (64 px)** | **83.30 %** |
+
+**+10.25 pp over hill-climb**, and it **exceeds the matched full-image baseline by +7.9 pp** — at 16× fewer sensor pixels. The learned diffractive transform is acting as a *useful analog feature extractor*, not merely a compressor: the 64-pixel optical features are more linearly separable for a tiny decoder than the raw 1024 pixels. Deterministic (no FMA), reproduced from clean in ~24 s.
+
+```sh
+cargo test -p photonlayer-bench --release --test mnist_gradient_bench \
+    mnist_gradient_full -- --ignored --nocapture
+```
+
+> Honest framing: the baseline is a *matched tiny (nearest-centroid) decoder*, not a CNN — so "beats the full-image baseline" means beats that matched baseline, not all digital methods. It is a real, reproduced ceiling-break for single-layer task-trained optics, not an absolute MNIST SOTA.
+
+Reproduce the single-mask numbers:
 ```sh
 # fetch MNIST IDX once into crates/photonlayer-bench/data/mnist/ (see test header), then:
 cargo test -p photonlayer-bench --release --test mnist_differential_bench \
@@ -51,7 +71,7 @@ cargo test -p photonlayer-bench --release --test mnist_differential_bench \
 ### Honest scope — what this is and is not
 
 - This is a **single** task-trained optical layer plus a tiny decoder = **competitive single-layer optical compression**. It is **not** a new accuracy state-of-the-art. Multi-layer ~97–99 % diffractive/optoelectronic networks are explicitly out of scope.
-- The −2.35 pp margin is the **converged single-mask optimum** on the drift-corrected FFT core. A training-budget sweep proves the residual gap is an **optimizer ceiling, not a budget issue** (1500/3000/4500 iters → −2.35/−2.15/−2.20 pp). Closing it — and reaching ~85–89 % — requires **analytic gradient descent** through the diffraction operator (the roadmap keystone), not more hill-climbing.
+- Hill-climbing converges to an **optimizer ceiling** (~73 %); **analytic gradient descent breaks it to 83.30 %** (see above), reproduced and deterministic. Further headroom (multi-plane cascade) is roadmap, not yet measured.
 - **No privacy or security guarantee is claimed.** PhotonLayer stores a *learned measurement, not the raw image* — a description, not a theorem. Reconstruction-resistance is an empirical property of one trained model. Never read this as "cannot be reconstructed," "privacy-preserving," or "zero-knowledge."
 
 ## Determinism & receipts
