@@ -56,14 +56,14 @@ The hill-climb result above is an **optimizer** ceiling, not an optics limit. Tr
 | full-image baseline (matched tiny decoder, 1024 px) | 75.40 % |
 | **gradient-trained optical (64 px)** | **83.30 %** |
 
-**+10.25 pp over hill-climb**, and it **exceeds the matched full-image baseline by +7.9 pp** — at 16× fewer sensor pixels. The learned diffractive transform is acting as a *useful analog feature extractor*, not merely a compressor: the 64-pixel optical features are more linearly separable for a tiny decoder than the raw 1024 pixels. Deterministic (no FMA), reproduced from clean in ~24 s.
+**+10.25 pp over hill-climb**, at 16× fewer sensor pixels — a real, reproduced ceiling-break for single-layer task-trained optics. Reproduced from clean in ~24 s.
 
 ```sh
 cargo test -p photonlayer-bench --release --test mnist_gradient_bench \
     mnist_gradient_full -- --ignored --nocapture
 ```
 
-> Honest framing: the baseline is a *matched tiny (nearest-centroid) decoder*, not a CNN — so "beats the full-image baseline" means beats that matched baseline, not all digital methods. It is a real, reproduced ceiling-break for single-layer task-trained optics, not an absolute MNIST SOTA.
+> **Read the +7.9 pp vs the full-image baseline carefully — it is NOT a superiority claim.** Holding the decoder fixed at a *tiny nearest-centroid head*, the 64 learned optical features are more linearly separable than 1024 raw pixels (83.30 % vs 75.40 %). That is a statement about **feature separability under a fixed weak decoder**, not evidence that optics beat digital methods: nearest-centroid on raw pixels is a deliberately weak baseline, and a small CNN on the *same* 1024 pixels reaches ~99 % and beats both. We report this so the obvious objection is already answered. It is a single-layer ceiling-break, not an absolute MNIST SOTA.
 
 Reproduce the single-mask numbers:
 ```sh
@@ -76,11 +76,13 @@ cargo test -p photonlayer-bench --release --test mnist_differential_bench \
 
 - This is a **single** task-trained optical layer plus a tiny decoder = **competitive single-layer optical compression**. It is **not** a new accuracy state-of-the-art. Multi-layer ~97–99 % diffractive/optoelectronic networks are explicitly out of scope.
 - Hill-climbing converges to an **optimizer ceiling** (~73 %); **analytic gradient descent breaks it to 83.30 %** (see above), reproduced and deterministic. Further headroom (multi-plane cascade) is roadmap, not yet measured.
-- **No privacy or security guarantee is claimed.** PhotonLayer stores a *learned measurement, not the raw image* — a description, not a theorem. Reconstruction-resistance is an empirical property of one trained model. Never read this as "cannot be reconstructed," "privacy-preserving," or "zero-knowledge."
+- **No privacy or security guarantee is claimed.** PhotonLayer stores a *learned measurement, not the raw image* — a description, not a theorem. Reconstruction-resistance is an empirical property of one trained model; the bundled probe measures **linear** invertibility only, and nonlinear (CNN/U-Net) reconstruction is expected to succeed. Never read this as "cannot be reconstructed," "privacy-preserving," or "zero-knowledge."
+- **The "16× MAC reduction" counts the *digital decoder* only** (640 vs 10 240). The optical front end performs an FFT-scale transform that is *passive in real hardware* (free-space diffraction) but is **not free in this simulator** — it is not counted in that figure. The honest claim is 16× fewer **sensor pixels** and 16× fewer **digital-decoder MACs**.
+- **All accuracy figures are noise-free scalar-diffraction simulation with continuous phase.** Robustness to phase quantization, sensor noise, and fabrication error is not yet characterized; expect degradation on real hardware. (A quantization/SNR ablation is roadmap.)
 
 ## Determinism & receipts
 
-The moat is not the optics — it is **reproducibility**. PhotonLayer uses an in-house scalar `Complex` type and a hand-rolled FFT (no FMA, fixed reduction order), so the same input + mask + config + seed produces **bit-identical** output across Linux/macOS/WASM. Every experiment emits a BLAKE3-bound receipt (model hash, config, what was measured, the decision), so an optical result is a *reproducible experiment*, not a claim.
+The intended moat is **reproducibility**. PhotonLayer uses an in-house scalar `Complex` type and a hand-rolled FFT with a fixed reduction order, designed so the same input + mask + config + seed yields **bit-identical** output. This is **verified within runs/builds on x86-64**; full cross-platform (Linux/macOS/WASM) bit-identity is a **design goal, not yet proven** — it depends on disabling FP contraction (FMA) and on platform-independent transcendentals (`sin`/`cos`/`sqrt`), which a CI matrix + checked-in golden hash will enforce (roadmap). Every experiment emits a BLAKE3-bound receipt (model hash, config, measurement, decision), so a result is a *reproducible experiment* on a fixed target.
 
 ## Quickstart
 
