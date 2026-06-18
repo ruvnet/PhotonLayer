@@ -63,10 +63,10 @@ The hill-climb result above is an **optimizer** ceiling, not an optics limit. Tr
 | trained planes | blind-test acc | Δ vs single-plane |
 |---|---:|---:|
 | 1 (single) | 83.30 % | — |
-| **2** | **88.35 %** | **+5.05 pp** |
-| **3** | **89.65 %** | **+6.35 pp** |
+| **2** | **88.80 %** | **+5.50 pp** |
+| 3 | 89.80 % | +6.50 pp |
 
-Each added plane sees a genuinely different diffracted field (verified decorrelated, not redundant); 3 planes reach 89.65%, approaching the 5-layer D2NN regime with fewer layers. Reproduced from clean in ~67 s, deterministic.
+Each added plane sees a genuinely different diffracted field (verified decorrelated to ~0.04 correlation, not redundant). The **2-plane 88.80 %** is the robust headline; the 3-plane 89.80 % is real but more init-sensitive, so it is reported, not over-asserted. Reproduced from clean in ~62 s, deterministic.
 
 ```sh
 cargo test -p photonlayer-bench --release --test mnist_gradient_bench \
@@ -87,7 +87,7 @@ cargo test -p photonlayer-bench --release --test mnist_differential_bench \
 ### Honest scope — what this is and is not
 
 - This is a **single** task-trained optical layer plus a tiny decoder = **competitive single-layer optical compression**. It is **not** a new accuracy state-of-the-art. Multi-layer ~97–99 % diffractive/optoelectronic networks are explicitly out of scope.
-- Hill-climbing converges to an **optimizer ceiling** (~73 %); **analytic gradient descent breaks it to 83.30 %** single-plane and a **3-plane cascade reaches 89.65 %** — all reproduced and deterministic, all at 16× sensor compression with the same matched decoder.
+- Hill-climbing converges to an **optimizer ceiling** (~73 %); **analytic gradient descent breaks it to 83.30 %** single-plane and a **multi-plane cascade reaches 88.80 % (2-plane) / 89.80 % (3-plane)** — all reproduced and deterministic, all at 16× sensor compression with the same matched decoder.
 - **No privacy or security guarantee is claimed.** PhotonLayer stores a *learned measurement, not the raw image* — a description, not a theorem. Reconstruction-resistance is an empirical property of one trained model; the bundled probe measures **linear** invertibility only, and nonlinear (CNN/U-Net) reconstruction is expected to succeed. Never read this as "cannot be reconstructed," "privacy-preserving," or "zero-knowledge."
 - **The "16× MAC reduction" counts the *digital decoder* only** (640 vs 10 240). The optical front end performs an FFT-scale transform that is *passive in real hardware* (free-space diffraction) but is **not free in this simulator** — it is not counted in that figure. The honest claim is 16× fewer **sensor pixels** and 16× fewer **digital-decoder MACs**.
 - **All accuracy figures are noise-free scalar-diffraction simulation with continuous phase.** Robustness to phase quantization, sensor noise, and fabrication error is not yet characterized; expect degradation on real hardware. (A quantization/SNR ablation is roadmap.)
